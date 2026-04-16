@@ -7,17 +7,8 @@ Tool signatures are provided automatically via function calling.
 When a tool returns an error or no results:
 
 1. **Verify the failure**: Check if the error is real or the tool actually returned usable data
-2. **Try alternative approaches**:
-   - If `web_search` fails, try different keywords or use `browser` to directly visit financial websites
-   - If `web_fetch` fails, verify the URL and try again
-   - For stock data, directly visit: eastmoney.com, 10jqka.com.cn, or sina.com.cn finance
-3. **Do NOT give up easily**: Most queries can be answered with persistent effort
-4. **Report partial results**: If you get some data, share it and note limitations
-
-Example recovery sequence for "stock market gainers":
-- web_search("A股涨幅排行") → fails
-- web_search("今日A股涨幅前十") → fails  
-- browser.visit("https://www.eastmoney.com") → success!
+2. **Do NOT give up easily**: Most queries can be answered with persistent effort
+3. **Report partial results**: If you get some data, share it and note limitations
 
 ### Data Modality Selection
 

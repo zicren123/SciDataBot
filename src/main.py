@@ -65,13 +65,35 @@ def create_app(config: dict = None):
     from src.tools.data_access import FormatDetector, MetadataExtractor, QualityAssessor
     from src.tools.data_processing import DataExtractor, DataTransformer, DataCleaner, StatisticsAnalyzer, MatFileExtractor
     from src.tools.data_integration import TemporalAligner, SpatialAligner, DataExporter
-    from src.tools.general import WeatherTool, WebSearchTool, WebFetchTool, ExecTool, ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, SpawnTool, CronTool
+    from src.tools.general import WeatherTool, WebSearchTool, WebFetchTool, ExecTool, ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, SpawnTool, CronTool, KimiWebSearchTool
     
     tool_registry.register(FormatDetector(), "data_access")
     tool_registry.register(MetadataExtractor(), "data_access")
     tool_registry.register(QualityAssessor(), "data_access")
     
-    tool_registry.register(WebSearchTool(), "general")
+    web_config = config.get("tools", {}).get("web", {})
+    web_provider = (web_config.get("provider")).lower()
+    if web_provider == "kimi":
+        tool_registry.register(
+            KimiWebSearchTool(
+                max_results=web_config.get("max_results", 5),
+                proxy=web_config.get("proxy"),
+                kimi_api_key=web_config.get("kimi_api_key"),
+                kimi_base_url=web_config.get("kimi_base_url"),
+                kimi_search_path=web_config.get("kimi_search_path"),
+                timeout=web_config.get("timeout", 10),
+            ),
+            "general"
+        )
+    else:
+        tool_registry.register(
+            WebSearchTool(
+                api_key=web_config.get("brave_api_key"),
+                max_results=web_config.get("max_results", 5),
+                proxy=web_config.get("proxy"),
+            ),
+            "general"
+        )
     tool_registry.register(WebFetchTool(), "general")
     tool_registry.register(ExecTool(), "general")
     tool_registry.register(ReadFileTool(), "general")
@@ -118,6 +140,14 @@ def create_app(config: dict = None):
 
     # Attach cron_service to agent for easy access
     agent.cron_service = cron_service
+    
+    # Inject message bus into web search tools for TUI notifications
+    web_search_tool = tool_registry._tools.get("web_search")
+    if web_search_tool:
+        web_search_tool.bus = agent.bus
+    kimi_search_tool = tool_registry._tools.get("kimi_web_search")
+    if kimi_search_tool:
+        kimi_search_tool.bus = agent.bus
 
     # Wire SpawnTool callback → SubagentManager.spawn (task_planner entry point)
     registered_spawn = tool_registry._tools.get("spawn")

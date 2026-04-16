@@ -10,7 +10,7 @@ from pathlib import Path
 def print_welcome(mode="auto"):
     """打印欢迎界面"""
     print("\033[1;36m" + "=" * 60 + "\033[0m")
-    print("\033[1;36m" + "         SciDataBot TUI v2.0" + "\033[0m")
+    print("\033[1;36m" + "          SciDataBot TUI v2.0" + "\033[0m")
     print("\033[1;36m" + "=" * 60 + "\033[0m")
     print()
     print(f"\033[1;32m欢迎使用 SciDataBot 文本界面！\033[0m")
@@ -99,13 +99,16 @@ async def run_simple_tui(scheduler, config_path=None):
             
             # 等待用户输入（在线程中执行，避免阻塞事件循环）
             if is_processing:
-                print("\033[90m[处理中...] 输入新消息或等待回复\033[0m ", end="", flush=True)
+                prompt = "\033[90m[处理中...] 输入新消息或等待回复\033[0m "
             else:
-                print("[SciDataBot] ", end="", flush=True)
-
+                prompt = "[SciDataBot] "
+            
             try:
                 loop = asyncio.get_event_loop()
-                message = await loop.run_in_executor(None, input)
+                message = await loop.run_in_executor(None, input, prompt)
+            except asyncio.CancelledError:
+                # 捕获异步任务被取消的异常
+                break
             except (KeyboardInterrupt, EOFError):
                 print("\n\033[1;31m退出程序\033[0m")
                 break
@@ -171,41 +174,25 @@ async def run_simple_tui(scheduler, config_path=None):
             )
             await scheduler.bus.publish_inbound(inbound_msg)
 
-    except KeyboardInterrupt:
-        print("\n\033[1;31m退出程序\033[0m")
-    except EOFError:
+    except (KeyboardInterrupt, EOFError):
         pass
     finally:
+        print("\n\033[1;31m退出程序\033[0m")
+        sys.stdout.flush()
         scheduler.stop()
         output_task.cancel()
         agent_task.cancel()
+        os._exit(0)
 
 
 async def run_connect(config_path=None):
-    """运行连接配置向导"""
+    """运行连接配置向导 - 支持动态加载的providers"""
     import yaml
-    import typer
-    from typing import Optional
-    from typing_extensions import Annotated
+    from src.providers import get_registry
     
-    PROVIDER_MODELS = {
-        "anthropic": {
-            "default": "claude-sonnet-4-20250514",
-            "options": ["claude-sonnet-4-20250514", "claude-opus-4-5-20250514", "claude-3-5-sonnet-20241022"],
-        },
-        "minimax": {
-            "default": "MiniMax-M2.5",
-            "options": ["MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
-        },
-        "glm": {
-            "default": "glm-4-flash",
-            "options": ["glm-4-flash", "glm-4-plus", "glm-4v", "glm-3-turbo"],
-        },
-        "custom": {
-            "default": "custom",
-            "options": [],
-        },
-    }
+    # 获取provider registry
+    registry = get_registry()
+    providers_list = registry.list_providers_for_tui()
     
     # 加载现有配置
     if config_path is None:
@@ -225,33 +212,31 @@ async def run_connect(config_path=None):
     current_provider = config_data.get("llm", {}).get("provider", "minimax")
     print(f"当前 provider: {current_provider}\n")
     
-    # 显示选项
+    # 显示可用 providers
     print("可用 providers:")
-    print("  1. anthropic  - Anthropic Claude API")
-    print("  2. minimax   - MiniMax API")
-    print("  3. glm        - Zhipu AI (GLM) API")
-    print("  4. custom     - Custom OpenAI-compatible API")
+    for i, (provider_name, metadata) in enumerate(providers_list, 1):
+        print(f"  {i}. {metadata.display_name:20} - {metadata.description}")
     print()
     
     # 获取选择
-    provider_choice = input("选择 provider (1-4) [默认 2]: ").strip() or "2"
+    max_choice = len(providers_list)
+    default_choice = "5" if max_choice >= 5 else str(max_choice)
+    provider_choice = input(f"选择 provider (1-{max_choice}) [默认 {default_choice}]: ").strip() or default_choice
     
-    provider_map = {"1": "anthropic", "2": "minimax", "3": "glm", "4": "custom"}
-    provider = provider_map.get(provider_choice, "minimax")
+    # 验证选择
+    try:
+        choice_idx = int(provider_choice) - 1
+        if 0 <= choice_idx < len(providers_list):
+            provider, metadata = providers_list[choice_idx]
+        else:
+            provider, metadata = providers_list[int(default_choice) - 1]
+    except (ValueError, IndexError):
+        provider, metadata = providers_list[int(default_choice) - 1]
     
-    print(f"\n已选择: {provider}")
+    print(f"\n已选择: {metadata.display_name}")
     
     # 获取 API key
-    env_var_map = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "minimax": "MINIMAX_API_KEY",
-        "glm": "ZHIPU_API_KEY",
-        "custom": "CUSTOM_API_KEY",
-    }
-    env_var = env_var_map.get(provider, "API_KEY")
-    current_key = os.environ.get(env_var, "")
-    
-    # 获取当前 provider 的 API key
+    current_key = os.environ.get(metadata.env_var, "")
     provider_key = config_data.get("llm", {}).get(provider, {}).get("api_key", "")
     saved_key = provider_key or current_key
 
@@ -262,26 +247,26 @@ async def run_connect(config_path=None):
         key_hint = saved_key
     else:
         key_hint = "未设置"
-    print(f"当前已保存: {key_hint}")
-
-    api_key = input(f"输入新 API Key (直接回车=保留当前值): ").strip()
-    if not api_key:
-        api_key = saved_key
-        print(f"已保留当前 key: {key_hint}")
+    
+    if metadata.requires_api_key:
+        print(f"当前已保存: {key_hint}")
+        api_key = input(f"输入新 API Key (直接回车=保留当前值): ").strip()
+        if not api_key:
+            api_key = saved_key
+            print(f"已保留当前 key: {key_hint}")
+    else:
+        api_key = saved_key or ""
+        print(f"此 provider 无需 API Key")
     
     # 获取模型
-    model_info = PROVIDER_MODELS.get(provider, {"default": "gpt-4o"})
-    default_model = model_info["default"]
-    options = model_info.get("options", [])
+    default_model = metadata.default_model or "gpt-4o"
     
-    if provider == "custom":
+    if provider == "proxy":
         model = input("Model name [默认 gpt-4o]: ").strip() or "gpt-4o"
-        base_url = input("Base URL (如 https://api.openai.com/v1): ").strip()
-    elif options:
-        print(f"\n可用模型: {', '.join(options)}")
-        model = input(f"Model [默认 {default_model}]: ").strip() or default_model
+        base_url = input("Base URL (如 https://api.openai.com/v1): ").strip() or metadata.base_url
     else:
-        model = default_model
+        model = input(f"Model [默认 {default_model}]: ").strip() or default_model
+        base_url = metadata.base_url
     
     # 获取温度
     temp_input = input("Temperature (0.0-1.0) [默认 0.7]: ").strip() or "0.7"
@@ -299,36 +284,22 @@ async def run_connect(config_path=None):
     
     # 更新配置
     config_data["llm"]["provider"] = provider
-    
-    if provider == "custom":
-        config_data["llm"]["custom"] = {
-            "api_key": api_key,
-            "model": model,
-            "base_url": base_url,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-    else:
-        config_data["llm"][provider] = {
-            "api_key": api_key,
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if provider == "minimax":
-            config_data["llm"][provider]["base_url"] = "https://api.minimaxi.com/anthropic"
-        elif provider == "anthropic":
-            config_data["llm"][provider]["base_url"] = "https://api.anthropic.com"
-        elif provider == "glm":
-            config_data["llm"][provider]["base_url"] = "https://open.bigmodel.cn/api/paas/v4"
+    config_data["llm"][provider] = {
+        "api_key": api_key,
+        "model": model,
+        "base_url": base_url,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
     
     # 保存配置
     with open(config_path, "w") as f:
         yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
 
     print(f"\n\033[1;32m✓ 配置已保存到 {config_path}\033[0m")
-    print(f"\nProvider: {provider}")
+    print(f"\n{metadata.display_name}")
     print(f"Model: {model}")
+    print(f"Base URL: {base_url}")
     print(f"Temperature: {temperature}")
     print(f"Max tokens: {max_tokens}")
 

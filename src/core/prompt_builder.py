@@ -1,6 +1,8 @@
 """Prompt builder - modular system prompt construction."""
 
+import json
 import platform
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -23,19 +25,20 @@ class PromptBuilder:
         if self.skill_loader is None:
             try:
                 from src.skills.manager import SkillLoader
-                skills_dir = workspace / "skills" if (workspace / "skills").exists() else None
-                self.skill_loader = SkillLoader(skills_dir)
+                self.skill_loader = SkillLoader(workspace=workspace)
             except ImportError:
                 logger.warning("SkillLoader not available, skills will be disabled")
                 self.skill_loader = None
     
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def build_system_prompt(self, skill_names: list[str] | None = None, user_request: str | None = None) -> str:
         """Build the complete system prompt."""
+        request_skills = self._get_preloaded_request_skills(user_request, skill_names)
         parts = [
             self._get_identity(),
             self._load_bootstrap_files(),
             self._get_memory_context(),
             self._get_active_skills(),
+            request_skills,
             self._build_skills_summary(),
         ]
         # Filter empty parts
@@ -134,8 +137,8 @@ Reply directly for conversation. Use 'message' tool to send to chat channels."""
             if summary:
                 return f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first.
+Builtin skills are preloaded from {self.workspace}/src/skills/builtin.
+User skills are loaded only when explicitly referenced by skill name (e.g. "CLIMATE SKILL") or by SKILL.md path.
 
 {summary}"""
         except Exception as e:
@@ -143,6 +146,59 @@ Skills with available="false" need dependencies installed first.
         
         return ""
     
+    def _get_preloaded_request_skills(
+        self,
+        user_request: str | None,
+        skill_names: list[str] | None = None,
+    ) -> str:
+        """Preload request-related skills before ReAct (principles 1 & 2)."""
+        if not self.skill_loader:
+            return ""
+
+        try:
+            names = self.skill_loader.load_skills_for_request(
+                request_text=user_request or "",
+                explicit_names=skill_names,
+                include_always=False,
+            )
+            if not names:
+                return ""
+            content = self.skill_loader.load_skills_for_context(names)
+            if not content:
+                return ""
+            return f"# Request Skills (Preloaded)\n\n{content}"
+        except Exception as e:
+            logger.warning(f"Failed to preload request skills: {e}")
+            return ""
+
+    def build_dynamic_skills_context(
+        self,
+        text: str,
+        already_loaded: set[str] | None = None,
+    ) -> tuple[str, list[str]]:
+        """Load additional skills during ReAct based on evolving context (principle 3)."""
+        if not self.skill_loader:
+            return "", []
+
+        loaded_set = already_loaded or set()
+        try:
+            candidate_names = self.skill_loader.load_skills_for_request(
+                request_text=text or "",
+                explicit_names=None,
+                include_always=False,
+            )
+            new_names = [n for n in candidate_names if n not in loaded_set]
+            if not new_names:
+                return "", []
+
+            content = self.skill_loader.load_skills_for_context(new_names)
+            if not content:
+                return "", []
+            return f"# Dynamic Skills (ReAct)\n\n{content}", new_names
+        except Exception as e:
+            logger.warning(f"Failed to build dynamic skills context: {e}")
+            return "", []
+
     @staticmethod
     def build_runtime_context(channel: str | None = None, chat_id: str | None = None) -> str:
         """Build runtime metadata block for injection before the user message."""
@@ -169,7 +225,7 @@ Skills with available="false" need dependencies installed first.
         runtime_ctx = self.build_runtime_context(channel, chat_id)
         
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, current_message)},
             *history,
             {"role": "user", "content": f"{runtime_ctx}\n\n{current_message}"},
         ]
@@ -228,23 +284,138 @@ Your workspace is at: {workspace_path}
                 logger.warning(f"Failed to load subagent template {subagent_type}: {e}")
         return ""
 
-    def build_task_planner_prompt(self, user_request: str) -> str:
+    @staticmethod
+    def _extract_skill_paths_from_text(text: str) -> list[str]:
+        """Extract SKILL.md paths from free text."""
+        if not text:
+            return []
+        pattern = r"(?:/[^\s\"']*SKILL\.md|(?:\.|\./|\.\./)?[^\s\"']*SKILL\.md)"
+        return re.findall(pattern, text)
+
+    @staticmethod
+    def _extract_skill_names_from_text(text: str) -> list[str]:
+        """Extract names like 'CLIMATE SKILL' from text."""
+        if not text:
+            return []
+        pattern = r"\b([A-Za-z0-9_\-]+)\s+skill\b"
+        return re.findall(pattern, text, re.IGNORECASE)
+
+    @staticmethod
+    def _dedupe_skill_names(names: list[str] | None) -> list[str]:
+        """Dedupe skill names while preserving order."""
+        if not names:
+            return []
+        out: list[str] = []
+        seen = set()
+        for n in names:
+            key = (n or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+
+    def _extract_inherited_skill_names(
+        self,
+        task_input: str | None,
+        inherited_skill_names: list[str] | None = None,
+    ) -> list[str]:
+        """Extract selected skills inherited from MainAgent context."""
+        result: list[str] = []
+        if inherited_skill_names:
+            result.extend(inherited_skill_names)
+
+        if task_input:
+            try:
+                data = json.loads(task_input)
+                if isinstance(data, dict):
+                    gc = data.get("global_context")
+                    if isinstance(gc, dict):
+                        selected = gc.get("selected_skills")
+                        if isinstance(selected, list):
+                            result.extend([str(x) for x in selected])
+            except Exception:
+                pass
+
+        return self._dedupe_skill_names(result)
+
+    def _build_subagent_skills_context(
+        self,
+        task_input: str | None = None,
+        inherited_skill_names: list[str] | None = None,
+    ) -> str:
+        """Build reusable skills context for subagent prompts."""
+        workspace_path = str(self.workspace.expanduser().resolve())
+
+        lines = [
+            "## Skills Context",
+            f"- Skill root (workspace): {workspace_path}/skills",
+            f"- Builtin skill root: {workspace_path}/src/skills/builtin",
+            "- Rule: Subagents MUST inherit skill constraints selected by MainAgent.",
+            "- Rule: Do NOT re-select skills by traversing user skill folders.",
+        ]
+
+        lines.append("- Rule: Builtin skills are preloaded before planning/execution.")
+        lines.append("- Rule: Execute strictly under inherited skill constraints.")
+
+        inherited_names = self._extract_inherited_skill_names(task_input, inherited_skill_names)
+        if self.skill_loader:
+            try:
+                if inherited_names:
+                    referenced_content = self.skill_loader.load_skills_for_context(inherited_names)
+                    if referenced_content:
+                        lines.append("\n## Inherited Skill Content (must follow)")
+                        lines.append(referenced_content)
+                    else:
+                        lines.append("\n## Inherited Skills")
+                        lines.append("- " + ", ".join(inherited_names))
+                else:
+                    lines.append("\n## Inherited Skills")
+                    lines.append("- (none provided by MainAgent)")
+            except Exception as e:
+                logger.warning(f"Failed to preload subagent skill content: {e}")
+
+        return "\n".join(lines)
+
+    def build_task_planner_prompt(self, user_request: str, inherited_skill_names: list[str] | None = None) -> str:
         """Build system prompt for TaskPlanner subagent."""
         template = self._load_subagent_template("task_planner")
         if template:
-            return template.replace("{user_request}", user_request).replace("{workspace}", str(self.workspace))
+            rendered = template.replace("{user_request}", user_request).replace("{workspace}", str(self.workspace))
+            skills_ctx = self._build_subagent_skills_context(user_request, inherited_skill_names)
+            return (
+                f"{rendered}\n\n"
+                "## Planning Constraint\n"
+                "You MUST preserve user-declared SKILL constraints in every pipeline task.\n"
+                "If a SKILL.md is referenced, make sure each pipeline/task explicitly requires following that SKILL.\n\n"
+                f"{skills_ctx}"
+            )
         return ""
 
-    def build_processor_prompt(self) -> str:
+    def build_processor_prompt(
+        self,
+        task_input: str | None = None,
+        inherited_skill_names: list[str] | None = None,
+    ) -> str:
         """Build system prompt for Processor subagent."""
         template = self._load_subagent_template("processor")
         if template:
-            return template.replace("{workspace}", str(self.workspace))
+            rendered = template.replace("{workspace}", str(self.workspace))
+            skills_ctx = self._build_subagent_skills_context(task_input, inherited_skill_names)
+            task_ctx = f"\n\n## Original Task Input\n{task_input}" if task_input else ""
+            return f"{rendered}\n\n{skills_ctx}{task_ctx}"
         return ""
 
-    def build_integrator_prompt(self) -> str:
+    def build_integrator_prompt(
+        self,
+        task_input: str | None = None,
+        inherited_skill_names: list[str] | None = None,
+    ) -> str:
         """Build system prompt for Integrator subagent."""
         template = self._load_subagent_template("integrator")
         if template:
-            return template.replace("{workspace}", str(self.workspace))
+            rendered = template.replace("{workspace}", str(self.workspace))
+            skills_ctx = self._build_subagent_skills_context(task_input, inherited_skill_names)
+            task_ctx = f"\n\n## Original Task Input\n{task_input}" if task_input else ""
+            return f"{rendered}\n\n{skills_ctx}{task_ctx}"
         return ""

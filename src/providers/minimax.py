@@ -53,7 +53,7 @@ class MiniMaxProvider(LLMProvider):
         self.retry_delay = retry_delay
         
         # 使用信号量限制并发数,防止触发速率限制
-        self._semaphore = asyncio.Semaphore(1)
+        self._semaphore = asyncio.Semaphore(20)
 
         if not self.api_key:
             raise ValueError("MiniMax API key is required. Set ANTHROPIC_AUTH_TOKEN env var or pass api_key.")

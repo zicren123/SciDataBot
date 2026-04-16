@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .base import Tool
+from src.bus.events import OutboundMessage
 
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
@@ -55,15 +56,29 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
+    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None, bus = None):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
+        self.bus = bus  # 事件总线，用于向 TUI 发送消息
 
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
         return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
+    
+    async def _notify_tui(self, message: str) -> None:
+        """向 TUI 发送提示消息。"""
+        if self.bus:
+            try:
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel="tui",
+                    chat_id="console",
+                    content=f"🔍 {message}"
+                ))
+            except Exception:
+                # 如果发送失败，静默处理
+                pass
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         # 如果没有 Brave API key，尝试使用 DuckDuckGo
@@ -89,6 +104,9 @@ class WebSearchTool(Tool):
             results = r.json().get("web", {}).get("results", [])[:n]
             if not results:
                 return f"No results for: {query}"
+
+            # 向 TUI 通知搜索成功
+            await self._notify_tui(f"网络搜索成功：找到 {len(results)} 条关于 '{query}' 的结果")
 
             lines = [f"Results for: {query}\n"]
             for i, item in enumerate(results, 1):
@@ -123,6 +141,8 @@ class WebSearchTool(Tool):
             if data.get("AnswerType") == "calc" or data.get("AbstractText"):
                 answer = data.get("AbstractText", "")
                 if answer:
+                    # 向 TUI 通知搜索成功
+                    await self._notify_tui(f"网络搜索成功：获取到 DuckDuckGo 即时答案")
                     return f"Answer: {answer}\n\nRelated: {data.get('AbstractURL', '')}"
             
             # 获取相关主题
@@ -132,6 +152,8 @@ class WebSearchTool(Tool):
                     results.append(f"- {topic['Text']}: {topic['FirstURL']}")
             
             if results:
+                # 向 TUI 通知搜索成功
+                await self._notify_tui(f"网络搜索成功：找到 {len(results)} 个相关主题")
                 return f"Results for '{query}':\n" + "\n".join(results)
             
             return f"No results for: {query}"
@@ -139,6 +161,191 @@ class WebSearchTool(Tool):
         except Exception as e:
             return f"Error: {e}"
 
+
+class KimiWebSearchTool(WebSearchTool):
+    """Search the web using Kimi Search API directly."""
+
+    name = "kimi_web_search"
+    description = "Search the web via Kimi Search API. Returns titles, URLs, and snippets."
+
+    def __init__(
+        self,
+        max_results: int = 5,
+        proxy: str | None = None,
+        kimi_api_key: str | None = None,
+        kimi_base_url: str | None = None,
+        kimi_search_path: str | None = None,
+        timeout: float = 10.0,
+        bus = None,
+    ):
+        super().__init__(api_key=None, max_results=max_results, proxy=proxy, bus=bus)
+        self.kimi_api_key = kimi_api_key
+        self.kimi_base_url = (kimi_base_url or "https://api.moonshot.cn/v1").rstrip("/")
+        self.timeout = timeout
+
+    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+        """Use Kimi builtin $web_search via chat/completions to avoid /search 404."""
+        import aiohttp
+
+        if not self.kimi_api_key:
+            return "Error: KIMI_API_KEY or MOONSHOT_API_KEY not set"
+
+        n = min(max(count or self.max_results, 1), 10)
+        url = f"{self.kimi_base_url}/chat/completions"
+
+        messages = [
+            {"role": "system", "content": "你是 Kimi。"},
+            {"role": "user", "content": f"请搜索以下内容并返回{n}条结果，包含标题、URL与摘要：\n{query}"},
+        ]
+
+        tools = [
+            {
+                "type": "builtin_function",
+                "function": {"name": "$web_search"},
+            }
+        ]
+
+        payload = {
+            "model": "kimi-k2.5",
+            "messages": messages,
+            "tools": tools,
+            "temperature": 0.6,
+            "max_tokens": 2048,
+            "enable_thinking": False,
+            "thinking": {"type": "disabled"},
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.kimi_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                max_tool_rounds = 3
+                for _ in range(max_tool_rounds):
+                    for msg in messages:
+                        if msg.get("role") == "assistant" and msg.get("tool_calls") and "reasoning_content" not in msg:
+                            msg["reasoning_content"] = ""
+                    async with session.post(url, json=payload, headers=headers, proxy=self.proxy) as r:
+                        if r.status != 200:
+                            error_text = await r.text()
+                            return (
+                                f"Kimi search error: {r.status}\n"
+                                f"URL: {url}\n"
+                                f"Details: {error_text}"
+                            )
+                        data = await r.json()
+
+                    choice = data.get("choices", [{}])[0]
+                    message = choice.get("message", {})
+                    finish_reason = choice.get("finish_reason")
+
+                    if finish_reason != "tool_calls":
+                        # 向 TUI 通知搜索成功
+                        await self._notify_tui(f"Kimi 网络搜索成功：已获取 '{query}' 的搜索结果")
+                        return message.get("content", "") or "No content"
+
+                    tool_calls = message.get("tool_calls") or []
+                    if message.get("role") == "assistant" and "reasoning_content" not in message:
+                        message["reasoning_content"] = ""
+                    messages.append(message)
+
+                    for tc in tool_calls:
+                        function = tc.get("function", {})
+                        args = function.get("arguments", "{}")
+                        try:
+                            args = json.loads(args) if isinstance(args, str) else args
+                        except Exception:
+                            args = {}
+
+                        tool_name = function.get("name", "$web_search")
+                        tool_query = args.get("query") or args.get("q") or query
+                        tool_count = args.get("count") or args.get("n") or n
+
+                        if tool_name in ("$web_search", "web_search"):
+                            content = await self._call_kimi_search_api(
+                                session=session,
+                                query=tool_query,
+                                count=tool_count,
+                            )
+                        else:
+                            content = json.dumps({"error": f"Unsupported tool: {tool_name}"}, ensure_ascii=False)
+
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "name": tool_name,
+                            "content": content,
+                        })
+
+                    payload["messages"] = messages
+
+                return "Error: tool_calls exceeded limit"
+
+        except aiohttp.ClientError as e:
+            return f"Error: {e}"
+        except Exception as e:
+            return f"Error: {e}"
+
+    async def _call_kimi_search_api(self, session, query: str, count: int | None) -> str:
+        """Call Kimi Search API and normalize results; fallback to DDG if needed."""
+        n = min(max(count or self.max_results, 1), 10)
+        url = f"{self.kimi_base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.kimi_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {"query": query, "count": n}
+
+        try:
+            async with session.post(url, json=payload, headers=headers, proxy=self.proxy) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return self._format_search_results(query, data, n)
+        except Exception:
+            pass
+
+        try:
+            async with session.get(url, params={"query": query, "count": n}, headers=headers, proxy=self.proxy) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return self._format_search_results(query, data, n)
+        except Exception:
+            pass
+
+        return await self._ddg_search(query, n)
+
+    def _format_search_results(self, query: str, data: dict, n: int) -> str:
+        """Normalize various search API payloads to a readable string."""
+        results = (
+            data.get("results")
+            or data.get("data")
+            or data.get("web", {}).get("results")
+            or data.get("items")
+            or []
+        )
+
+        if not isinstance(results, list):
+            return f"Results for: {query}\n\n{json.dumps(data, ensure_ascii=False)}"
+
+        results = results[:n]
+        if not results:
+            return f"No results for: {query}"
+
+        lines = [f"Results for: {query}\n"]
+        for i, item in enumerate(results, 1):
+            title = item.get("title") or item.get("name") or ""
+            url = item.get("url") or item.get("link") or ""
+            snippet = item.get("snippet") or item.get("description") or item.get("summary") or ""
+            lines.append(f"{i}. {title}\n   {url}")
+            if snippet:
+                lines.append(f"   {snippet}")
+
+        return "\n".join(lines)
 
 class WebFetchTool(Tool):
     """Fetch and extract content from a URL using Readability."""

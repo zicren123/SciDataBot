@@ -3,7 +3,7 @@
 from ..base import Tool
 from .filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from .shell import ExecTool, REPLTool
-from .web import WebSearchTool, WebFetchTool, BrowserTool
+from .web import WebSearchTool, WebFetchTool, BrowserTool, KimiWebSearchTool
 from .message import MessageTool, OutboundMessage
 from .spawn import SpawnTool
 from .mcp import MCPConfig, connect_mcp_servers, MCPToolWrapper, MCPTool
@@ -23,6 +23,7 @@ __all__ = [
     "REPLTool",
     # Web
     "WebSearchTool",
+    "KimiWebSearchTool",
     "WebFetchTool",
     "BrowserTool",
     # Message

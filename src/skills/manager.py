@@ -1,6 +1,6 @@
 """Skill loader - load and manage skills from SKILL.md files"""
 
-import os
+import re
 import shutil
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -15,47 +15,49 @@ class SkillLoader:
     Skill loader - manages skill installation and loading
 
     Skills are loaded from:
-    - Built-in skills: src/skills/builtin/
+    - Built-in skills: ~/.scidatabot/src/skills/builtin/
     - User skills: ~/.scidatabot/skills/
     - External skills: can be installed via CLI
     """
 
-    def __init__(self, skills_dir: Optional[Path] = None):
+    SKILL_PATH_PATTERN = re.compile(r"(?:/[\w\-./]+SKILL\.md|(?:\.|\./|\.\./)?[\w\-./]+SKILL\.md)", re.IGNORECASE)
+    SKILL_NAME_PATTERN = re.compile(r"\b([A-Za-z0-9_\-]+)\s+skill\b", re.IGNORECASE)
+
+    def __init__(self, skills_dir: Optional[Path] = None, workspace: Optional[Path] = None):
         """Initialize skill loader"""
-        # Default skills directory
-        if skills_dir:
-            self.skills_dir = skills_dir
-        else:
-            # User skills directory
-            self.skills_dir = Path.home() / ".scidatabot" / "skills"
+        self.workspace = (workspace or Path.cwd()).expanduser().resolve()
+
+        # User skills directory (workspace-local by default)
+        self.skills_dir = (
+            skills_dir.expanduser().resolve()
+            if skills_dir
+            else (self.workspace / "skills")
+        )
 
         self.skills_dir.mkdir(parents=True, exist_ok=True)
 
-        # Built-in skills directory
-        self.builtin_dir = Path(__file__).parent / "builtin"
+        # Built-in skills directory (prefer workspace source path)
+        self.builtin_dir = self.workspace / "src" / "skills" / "builtin"
         if not self.builtin_dir.exists():
-            self.builtin_dir = Path(__file__).parent / "skills"
+            self.builtin_dir = Path(__file__).parent / "builtin"
 
         # Loaded skills cache
         self._skills: Dict[str, Skill] = {}
         self._loaded = False
 
     def load_all(self) -> Dict[str, Skill]:
-        """Load all skills (builtin + user installed)"""
+        """Load all preloaded skills (builtin only)."""
         if self._loaded:
             return self._skills
 
         self._skills = {}
 
-        # Load built-in skills
+        # Principle 1: preload built-in skills only.
         if self.builtin_dir.exists():
             self._load_from_dir(self.builtin_dir, is_builtin=True)
 
-        # Load user skills
-        self._load_from_dir(self.skills_dir, is_builtin=False)
-
         self._loaded = True
-        logger.info(f"Loaded {len(self._skills)} skills")
+        logger.info(f"Preloaded {len(self._skills)} builtin skills")
         return self._skills
 
     def _load_from_dir(self, skills_path: Path, is_builtin: bool = False):
@@ -70,28 +72,100 @@ class SkillLoader:
                     try:
                         skill = Skill.from_file(skill_file)
                         skill.path = skill_file
-                        # Mark as builtin if from builtin dir
-                        if is_builtin:
-                            skill.metadata.name = f"builtin:{skill.name}"
                         self._skills[skill.name] = skill
+                        if is_builtin:
+                            self._skills[f"builtin:{skill.name}"] = skill
                         logger.debug(f"Loaded skill: {skill.name}")
                     except Exception as e:
                         logger.warning(f"Failed to load skill {item.name}: {e}")
+
+    def _load_single_skill_file(self, skill_file: Path, is_builtin: bool = False) -> Optional[Skill]:
+        """Load a single SKILL.md file into cache."""
+        if not skill_file.exists() or not skill_file.is_file():
+            return None
+
+        try:
+            skill = Skill.from_file(skill_file)
+            skill.path = skill_file
+            self._skills[skill.name] = skill
+            if is_builtin:
+                self._skills[f"builtin:{skill.name}"] = skill
+            return skill
+        except Exception as e:
+            logger.warning(f"Failed to load skill file {skill_file}: {e}")
+            return None
+
+    @staticmethod
+    def _normalize_skill_token(name: str) -> str:
+        token = (name or "").strip()
+        token = re.sub(r"\s+", "_", token)
+        token = re.sub(r"_+", "_", token)
+        token = token.strip("_")
+        return token
+
+    def _resolve_user_skill_path(self, ref: str) -> Optional[Path]:
+        """Resolve user skill by explicit path or by name without directory traversal."""
+        raw = (ref or "").strip().strip('"\'')
+        if not raw:
+            return None
+
+        # Explicit path form
+        if "SKILL.md" in raw or "/" in raw or raw.startswith("."):
+            p = Path(raw)
+            if not p.is_absolute():
+                p = (self.workspace / p).resolve()
+            if p.is_dir():
+                p = p / "SKILL.md"
+            if p.name != "SKILL.md":
+                return None
+            try:
+                p.relative_to(self.skills_dir.resolve())
+            except Exception:
+                return None
+            return p if p.exists() else None
+
+        # Name form: <name> -> {workspace}/skills/<name>/SKILL.md
+        token = self._normalize_skill_token(raw)
+        token = re.sub(r"(?i)_?skill$", "", token)
+        if not token:
+            return None
+
+        candidates = [
+            token,
+            token.lower(),
+            token.replace("-", "_").lower(),
+            token.replace("_", "-").lower(),
+        ]
+
+        for c in candidates:
+            p = (self.skills_dir / c / "SKILL.md").resolve()
+            if p.exists() and p.is_file():
+                return p
+        return None
 
     def get(self, name: str) -> Optional[Skill]:
         """Get a skill by name"""
         if not self._loaded:
             self.load_all()
 
+        key = (name or "").strip()
+
         # Try exact match
-        if name in self._skills:
-            return self._skills[name]
+        if key in self._skills:
+            return self._skills[key]
 
         # Try with builtin: prefix
-        if name.startswith("builtin:"):
-            key = name.replace("builtin:", "")
-            if key in self._skills:
-                return self._skills[key]
+        if key.startswith("builtin:"):
+            plain = key.replace("builtin:", "", 1)
+            if plain in self._skills:
+                return self._skills[plain]
+
+        # Try loading user skill lazily by explicit name/path
+        user_skill_path = self._resolve_user_skill_path(key)
+        if user_skill_path:
+            loaded = self._load_single_skill_file(user_skill_path, is_builtin=False)
+            if loaded:
+                return loaded
 
         return None
 
@@ -99,7 +173,10 @@ class SkillLoader:
         """List all available skills"""
         if not self._loaded:
             self.load_all()
-        return list(self._skills.values())
+        dedup: Dict[str, Skill] = {}
+        for s in self._skills.values():
+            dedup[s.name] = s
+        return list(dedup.values())
 
     def install(self, skill_path: Path) -> Skill:
         """
@@ -184,7 +261,12 @@ class SkillLoader:
         """获取始终加载的 skills"""
         result = []
         for s in self.list():
-            if s.metadata.always:
+            is_builtin = False
+            try:
+                is_builtin = str(s.path.resolve()).startswith(str(self.builtin_dir.resolve()))
+            except Exception:
+                is_builtin = False
+            if s.metadata.always and is_builtin:
                 result.append(s.name)
         return result
 
@@ -202,6 +284,79 @@ class SkillLoader:
                 parts.append(f"### Skill: {name}\n\n{content}")
         
         return "\n\n---\n\n".join(parts) if parts else ""
+
+    def extract_references_from_text(self, text: str) -> Dict[str, List[str]]:
+        """Extract skill names and skill paths from user text."""
+        if not text:
+            return {"names": [], "paths": []}
+
+        names = [m.group(1) for m in self.SKILL_NAME_PATTERN.finditer(text)]
+        paths = self.SKILL_PATH_PATTERN.findall(text)
+
+        # 去重并保持顺序
+        def _dedupe(items: List[str]) -> List[str]:
+            out: List[str] = []
+            seen = set()
+            for it in items:
+                k = (it or "").strip()
+                if not k or k in seen:
+                    continue
+                seen.add(k)
+                out.append(k)
+            return out
+
+        return {
+            "names": _dedupe(names),
+            "paths": _dedupe(paths),
+        }
+
+    def load_skills_for_request(
+        self,
+        request_text: str,
+        explicit_names: Optional[List[str]] = None,
+        include_always: bool = True,
+    ) -> List[str]:
+        """Load skills required by the request (builtin + explicitly referenced user skills)."""
+        if not self._loaded:
+            self.load_all()
+
+        loaded_names: List[str] = []
+
+        # Principle 1: always skills from builtin catalog
+        if include_always:
+            loaded_names.extend(self.get_always_skills())
+
+        refs = self.extract_references_from_text(request_text or "")
+
+        # Principle 2: explicit path references
+        for raw_path in refs["paths"]:
+            p = self._resolve_user_skill_path(raw_path)
+            if not p:
+                continue
+            sk = self._load_single_skill_file(p, is_builtin=False)
+            if sk:
+                loaded_names.append(sk.name)
+
+        # Principle 2: explicit skill names (e.g., CLIMATE SKILL)
+        candidate_names = []
+        if explicit_names:
+            candidate_names.extend(explicit_names)
+        candidate_names.extend(refs["names"])
+
+        for n in candidate_names:
+            s = self.get(n)
+            if s:
+                loaded_names.append(s.name)
+
+        # 去重并保持顺序
+        deduped: List[str] = []
+        seen = set()
+        for n in loaded_names:
+            if n in seen:
+                continue
+            seen.add(n)
+            deduped.append(n)
+        return deduped
 
 
 # Global skill loader instance

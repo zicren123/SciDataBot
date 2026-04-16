@@ -70,6 +70,8 @@ class LLMProvider(ABC):
 
     def convert_messages_openai(self, messages: list) -> list[dict]:
         """将消息转换为OpenAI格式"""
+        import json
+        
         openai_messages = []
         for msg in messages:
             if isinstance(msg, dict):
@@ -80,18 +82,48 @@ class LLMProvider(ABC):
                 role = getattr(msg, "role", "user")
                 content = getattr(msg, "content", "")
                 tool_call_id = getattr(msg, "tool_call_id", None)
-            
+        
+            # 严格确保 content 是字符串，不能是 None 或其他类型
+            if content is None:
+                content = ""
+            elif isinstance(content, list):
+                # 如果是列表（某些富文本格式），转换为 JSON 字符串
+                content = json.dumps(content, ensure_ascii=False)
+            elif not isinstance(content, str):
+                # 其他类型转换为字符串
+                content = str(content)
+        
             if role == "user":
                 openai_messages.append({"role": "user", "content": content})
             elif role == "assistant":
-                openai_messages.append({"role": "assistant", "content": content})
+                if isinstance(msg, dict) and msg.get("tool_calls"):
+                    tool_calls = []
+                    for tc in msg.get("tool_calls", []):
+                        if isinstance(tc, dict):
+                            if "type" not in tc:
+                                tc = {**tc, "type": "function"}
+                            elif not tc.get("type"):
+                                tc["type"] = "function"
+                            tool_calls.append(tc)
+                        else:
+                            tool_calls.append(tc)
+                    openai_messages.append({
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    })
+                else:
+                    openai_messages.append({"role": "assistant", "content": content})
             elif role == "system":
                 openai_messages.append({"role": "system", "content": content})
             elif role == "tool":
+                # tool 消息必须有 content 和 tool_call_id
+                # Ensure tool_call_id is never empty for OpenAI-compatible APIs
+                final_tool_call_id = tool_call_id or "unknown"
                 openai_messages.append({
                     "role": "tool",
-                    "content": content,
-                    "tool_call_id": tool_call_id,
+                    "content": content if content else "",  # 确保不是 None
+                    "tool_call_id": final_tool_call_id,
                 })
         return openai_messages
 

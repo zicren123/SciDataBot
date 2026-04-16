@@ -1,38 +1,40 @@
-# 用户配置 / User Profile
+# User Profile
 
-请填写以下信息以便个性化交互 / Fill in to personalize interactions:
+Please fill in the following information to personalize interactions:
 
-## 基本信息 / Basic Info
+## Basic Info
 
-- **姓名 / Name**: 
-- **时区 / Timezone**: (如 / e.g., UTC+8)
-- **语言 / Language**: 
+- **Name**:
+- **Timezone**: (e.g., UTC+8)
+- **Language**:
 
-## 数据偏好 / Data Preferences
+## Data Preferences
 
-### 数据类型 / Data Types
-- [ ] 图像处理 / Image processing
-- [ ] 点云 / 3D / Point cloud
-- [ ] 时序数据 / Time series
-- [ ] 表格数据 / Tabular / CSV
-- [ ] 视频 / Video
-- [ ] 音频 / Audio
+### Data Types
 
-### 处理风格 / Processing Style
-- [ ] 详细分析 + 完整指标 / Detailed analysis with metrics
-- [ ] 快速摘要 + 关键结果 / Quick summary with key results
-- [ ] 交互式探索 / Interactive exploration
+- [ ] Image processing
+- [ ] Point cloud
+- [ ] Time series
+- [ ] Tabular/CSV
+- [ ] Video
+- [ ] Audio
 
-## 工作背景 / Work Context
+### Processing Style
 
-- **主要角色 / Role**: (如 / e.g., 研究员 / 开发者 / 数据科学家)
-- **主要项目 / Projects**: 
-- **常用工具 / Tools**: 
+- [ ] Detailed analysis with metrics
+- [ ] Quick summary with key results
+- [ ] Interactive exploration
 
-## 感兴趣的话题 / Topics of Interest
-- 
-- 
+## Work Context
 
-## 特殊指令 / Special Instructions
+- **Main Roles:** (e.g., Researcher/Developer/Data Scientist)
 
-(对 SciDataBot 的特殊要求)
+- **Main Projects:**
+
+- **Common Tools:**
+
+## Topics of Interest
+
+## Special Instructions
+
+(Special requirements for SciDataBot)

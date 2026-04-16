@@ -127,21 +127,23 @@ class ChannelManager:
     def _create_channel(self, channel_type: ChannelType, config: dict) -> Channel:
         """Create channel instance based on type."""
         from .console import ConsoleChannel
-        from .telegram import TelegramChannel
         from .feishu import FeishuChannel, FeishuWebHookChannel
         from .feishu_ws import FeishuWSChannel
+        from .wechat import WeChatChannel, WeChatWebhookChannel
         from .webhook import WebhookChannel
 
         if channel_type == ChannelType.CONSOLE:
             return ConsoleChannel(config)
-        elif channel_type == ChannelType.TELEGRAM:
-            return TelegramChannel(config)
         elif channel_type == ChannelType.FEISHU:
             if "webhook_url" in config:
                 return FeishuWebHookChannel(config)
             return FeishuChannel(config)
         elif channel_type == ChannelType.FEISHU_WS:
             return FeishuWSChannel(config)
+        elif channel_type == ChannelType.WECHAT:
+            if "webhook_url" in config:
+                return WeChatWebhookChannel(config)
+            return WeChatChannel(config)
         elif channel_type == ChannelType.WEBHOOK:
             return WebhookChannel(config)
         else:

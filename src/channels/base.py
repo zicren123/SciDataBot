@@ -9,9 +9,9 @@ from src.bus.events import InboundMessage as BusInboundMessage, OutboundMessage 
 class ChannelType(Enum):
     """Channel types."""
     CONSOLE = "console"
-    TELEGRAM = "telegram"
     FEISHU = "feishu"
     FEISHU_WS = "feishu_ws"
+    WECHAT = "wechat"
     LINE = "line"
     WEB = "web"
     WEBHOOK = "webhook"

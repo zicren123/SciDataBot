@@ -12,6 +12,7 @@ dependencies = [
     # LLM Providers
     "openai>=1.0.0",
     "anthropic>=0.25.0",
+    "google-generativeai>=0.8.0",
     # HTTP Client
     "aiohttp>=3.9.0",
     # WebSocket
@@ -34,6 +35,8 @@ dependencies = [
     "psutil>=5.9.0",
     # Cron
     "croniter>=2.0.0",
+    # Encryption (for WeChat message decryption)
+    "pycryptodome>=3.19.0",
     # Feishu
     "lark-oapi>=1.0.0",
 ]
@@ -62,6 +65,7 @@ all = [
     "pyyaml>=6.0.0",
     "psutil>=5.9.0",
     "croniter>=2.0.0",
+    "pycryptodome>=3.19.0",
     "lark-oapi>=1.0.0",
 ]
 

@@ -236,4 +236,5 @@ class Tool:
         """Get all name variants."""
         variants = [self.name]
         variants.append("".join(word.capitalize() for word in self.name.split("_")))
+        variants.append(f"functions.{self.name}")
         return variants

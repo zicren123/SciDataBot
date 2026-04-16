@@ -11,7 +11,11 @@ from loguru import logger
 
 from ..config import Config, ConfigManager
 from ..channels import ChannelManager, ChannelType
-from ..providers import OpenAIProvider, AnthropicProvider, MockProvider, MiniMaxProvider, GLMProvider
+from ..providers import (
+    OpenAIProvider, AnthropicProvider, MockProvider, MiniMaxProvider, GLMProvider,
+    KimiProvider, DeepSeekProvider, QwenProvider, GrokProvider, 
+    GoogleGeminiProvider, InternS1Provider, ProxyProvider
+)
 from ..tools import ToolRegistry
 from ..core.main_agent import MainAgent
 
@@ -141,20 +145,134 @@ def create_llm_provider(config: dict):
             timeout=glm_config.get("timeout", 60),
         )
 
-    elif provider_type == "custom":
-        custom_config = config.get("llm", {}).get("custom", {})
-        api_key = custom_config.get("api_key") or os.environ.get("CUSTOM_API_KEY")
-        if not api_key:
-            typer.echo("Warning: Custom API key not set, using MockProvider")
+    elif provider_type == "proxy":
+        proxy_config = config.get("llm", {}).get("proxy", {})
+        api_key = proxy_config.get("api_key") or os.environ.get("PROXY_API_KEY")
+        base_url = proxy_config.get("base_url")
+        if not api_key or not base_url:
+            typer.echo("Warning: Proxy API key or base_url not set, using MockProvider")
             return MockProvider(model="mock")
 
-        return OpenAIProvider(
+        return ProxyProvider(
             api_key=api_key,
-            model=custom_config.get("model", "gpt-4o"),
-            base_url=custom_config.get("base_url"),
-            temperature=custom_config.get("temperature", 0.7),
-            max_tokens=custom_config.get("max_tokens", 4096),
-            timeout=custom_config.get("timeout", 60),
+            model=proxy_config.get("model", "gpt-4o"),
+            base_url=base_url,
+            temperature=proxy_config.get("temperature", 0.7),
+            max_tokens=proxy_config.get("max_tokens", 4096),
+            timeout=proxy_config.get("timeout", 60),
+        )
+
+    elif provider_type == "kimi":
+        kimi_config = config.get("llm", {}).get("kimi", {})
+        api_key = kimi_config.get("api_key") or os.environ.get("KIMI_API_KEY") or os.environ.get("MOONSHOT_API_KEY")
+        if not api_key:
+            typer.echo("Warning: Kimi API key not set (KIMI_API_KEY or MOONSHOT_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return KimiProvider(
+            api_key=api_key,
+            model=kimi_config.get("model", "moonshot-v1-128k"),
+            base_url=kimi_config.get("base_url", "https://api.moonshot.cn/v1"),
+            temperature=kimi_config.get("temperature", 0.7),
+            max_tokens=kimi_config.get("max_tokens", 4096),
+            timeout=kimi_config.get("timeout", 60),
+        )
+
+    elif provider_type == "deepseek":
+        deepseek_config = config.get("llm", {}).get("deepseek", {})
+        api_key = deepseek_config.get("api_key") or os.environ.get("DEEPSEEK_API_KEY")
+        if not api_key:
+            typer.echo("Warning: DeepSeek API key not set (DEEPSEEK_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return DeepSeekProvider(
+            api_key=api_key,
+            model=deepseek_config.get("model", "deepseek-chat"),
+            base_url=deepseek_config.get("base_url", "https://api.deepseek.com/v1"),
+            temperature=deepseek_config.get("temperature", 0.7),
+            max_tokens=deepseek_config.get("max_tokens", 4096),
+            timeout=deepseek_config.get("timeout", 60),
+        )
+
+    elif provider_type == "qwen":
+        qwen_config = config.get("llm", {}).get("qwen", {})
+        api_key = qwen_config.get("api_key") or os.environ.get("QWEN_API_KEY")
+        if not api_key:
+            typer.echo("Warning: Qwen API key not set (QWEN_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return QwenProvider(
+            api_key=api_key,
+            model=qwen_config.get("model", "qwen-plus"),
+            base_url=qwen_config.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            temperature=qwen_config.get("temperature", 0.7),
+            max_tokens=qwen_config.get("max_tokens", 4096),
+            timeout=qwen_config.get("timeout", 60),
+        )
+
+    elif provider_type == "grok":
+        grok_config = config.get("llm", {}).get("grok", {})
+        api_key = grok_config.get("api_key") or os.environ.get("XAI_API_KEY")
+        if not api_key:
+            typer.echo("Warning: Grok API key not set (XAI_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return GrokProvider(
+            api_key=api_key,
+            model=grok_config.get("model", "grok-3"),
+            base_url=grok_config.get("base_url", "https://api.x.ai/v1"),
+            temperature=grok_config.get("temperature", 0.7),
+            max_tokens=grok_config.get("max_tokens", 4096),
+            timeout=grok_config.get("timeout", 60),
+        )
+
+    elif provider_type == "google":
+        google_config = config.get("llm", {}).get("google", {})
+        api_key = google_config.get("api_key") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            typer.echo("Warning: Google API key not set (GOOGLE_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return GoogleGeminiProvider(
+            api_key=api_key,
+            model=google_config.get("model", "gemini-2.0-flash"),
+            base_url=google_config.get("base_url", "https://generativelanguage.googleapis.com/v1beta"),
+            temperature=google_config.get("temperature", 0.7),
+            max_tokens=google_config.get("max_tokens", 4096),
+            timeout=google_config.get("timeout", 60),
+        )
+
+    elif provider_type == "intern_s1":
+        intern_config = config.get("llm", {}).get("intern_s1", {})
+        api_key = intern_config.get("api_key") or os.environ.get("INTERN_S1_API_KEY")
+        if not api_key:
+            typer.echo("Warning: Intern-S1 API key not set (INTERN_S1_API_KEY), using MockProvider")
+            return MockProvider(model="mock")
+
+        return InternS1Provider(
+            api_key=api_key,
+            model=intern_config.get("model", "intern-s1"),
+            base_url=intern_config.get("base_url", "https://chat.intern-ai.org.cn/api/v1"),
+            temperature=intern_config.get("temperature", 0.7),
+            max_tokens=intern_config.get("max_tokens", 4096),
+            timeout=intern_config.get("timeout", 60),
+        )
+
+    elif provider_type == "proxy":
+        proxy_config = config.get("llm", {}).get("proxy", {})
+        api_key = proxy_config.get("api_key") or os.environ.get("PROXY_API_KEY")
+        base_url = proxy_config.get("base_url")
+        if not api_key or not base_url:
+            typer.echo("Warning: Proxy API key or base_url not set, using MockProvider")
+            return MockProvider(model="mock")
+
+        return ProxyProvider(
+            api_key=api_key,
+            model=proxy_config.get("model", "gpt-4o"),
+            base_url=base_url,
+            temperature=proxy_config.get("temperature", 0.7),
+            max_tokens=proxy_config.get("max_tokens", 4096),
+            timeout=proxy_config.get("timeout", 60),
         )
 
     else:
@@ -252,7 +370,15 @@ def run(
     tool_registry.register(WeatherTool(), "general")
     web_config = config_data.get("tools", {}).get("web", {})
     tool_registry.register(
-        WebSearchTool(api_key=web_config.get("brave_api_key")),
+        WebSearchTool(
+            api_key=web_config.get("brave_api_key"),
+            provider=web_config.get("provider"),
+            proxy=web_config.get("proxy"),
+            kimi_api_key=web_config.get("kimi_api_key"),
+            kimi_base_url=web_config.get("kimi_base_url"),
+            kimi_search_path=web_config.get("kimi_search_path"),
+            timeout=web_config.get("timeout", 10),
+        ),
         "general"
     )
     tool_registry.register(WebFetchTool(), "general")
@@ -511,6 +637,30 @@ PROVIDER_MODELS = {
         "default": "glm-4-flash",
         "options": ["glm-4-flash", "glm-4-plus", "glm-4v", "glm-3-turbo"],
     },
+    "kimi": {
+        "default": "moonshot-v1-128k",
+        "options": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    },
+    "deepseek": {
+        "default": "deepseek-chat",
+        "options": ["deepseek-chat"],
+    },
+    "qwen": {
+        "default": "qwen-plus",
+        "options": ["qwen-plus", "qwen-turbo"],
+    },
+    "grok": {
+        "default": "grok-3",
+        "options": ["grok-3"],
+    },
+    "google": {
+        "default": "gemini-2.0-flash",
+        "options": ["gemini-2.0-flash", "gemini-1.5-flash"],
+    },
+    "openai": {
+        "default": "gpt-4o",
+        "options": ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+    },
     "boyuerichdata": {
         "default": "claude-sonnet-4-6-thinking",
         "options": ["claude-sonnet-4-6-thinking"],
@@ -566,20 +716,30 @@ def connect(
         # Show provider options
         typer.echo("Available providers:")
         typer.echo("  1. anthropic       - Anthropic Claude API")
-        typer.echo("  2. minimax        - MiniMax API")
-        typer.echo("  3. glm            - Zhipu AI (GLM) API")
-        typer.echo("  4. boyuerichdata  - BoyueRichData API")
+        typer.echo("  2. minimax         - MiniMax API")
+        typer.echo("  3. glm             - Zhipu AI (GLM) API")
+        typer.echo("  4. kimi            - Moonshot Kimi API")
+        typer.echo("  5. deepseek        - DeepSeek API")
+        typer.echo("  6. qwen            - Alibaba Qwen API")
+        typer.echo("  7. grok            - xAI Grok API")
+        typer.echo("  8. google          - Google Gemini API")
+        typer.echo("  9. openai          - OpenAI API")
+        typer.echo("  10. boyuerichdata  - BoyueRichData API")
         typer.echo("")
         
         # Get provider choice
         provider_choice = typer.prompt(
-            "Select provider (1-4)",
-            default="4",
+            "Select provider (1-10)",
+            default="1",
             show_default=False,
         )
         
-        provider_map = {"1": "anthropic", "2": "minimax", "3": "glm", "4": "boyuerichdata"}
-        selected_provider = provider_map.get(provider_choice, "boyuerichdata")
+        provider_map = {
+            "1": "anthropic", "2": "minimax", "3": "glm", "4": "kimi", 
+            "5": "deepseek", "6": "qwen", "7": "grok", "8": "google",
+            "9": "openai", "10": "boyuerichdata"
+        }
+        selected_provider = provider_map.get(provider_choice, "anthropic")
         
         typer.echo(f"\nSelected: {selected_provider}")
         
@@ -588,6 +748,12 @@ def connect(
             "anthropic": "ANTHROPIC_API_KEY",
             "minimax": "MINIMAX_API_KEY",
             "glm": "ZHIPU_API_KEY",
+            "kimi": "KIMI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "qwen": "QWEN_API_KEY",
+            "grok": "XAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "openai": "OPENAI_API_KEY",
             "boyuerichdata": "BOYUERICHDATA_API_KEY",
         }
         env_var = env_var_map.get(selected_provider, "API_KEY")
@@ -641,14 +807,23 @@ def connect(
         "temperature": selected_temp,
         "max_tokens": selected_tokens,
     }
-    if selected_provider == "minimax":
-        config_data["llm"][selected_provider]["base_url"] = "https://api.minimaxi.com/anthropic"
-    elif selected_provider == "anthropic":
-        config_data["llm"][selected_provider]["base_url"] = "https://api.anthropic.com"
-    elif selected_provider == "glm":
-        config_data["llm"][selected_provider]["base_url"] = "https://open.bigmodel.cn/api/paas/v4"
-    elif selected_provider == "boyuerichdata":
-        config_data["llm"][selected_provider]["base_url"] = "http://35.220.164.252:3888"
+    
+    # Set base_url for each provider
+    base_url_map = {
+        "minimax": "https://api.minimaxi.com/anthropic",
+        "anthropic": "https://api.anthropic.com",
+        "glm": "https://open.bigmodel.cn/api/paas/v4",
+        "kimi": "https://api.moonshot.cn/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "grok": "https://api.x.ai/v1",
+        "google": "https://generativelanguage.googleapis.com/v1beta",
+        "openai": "https://api.openai.com/v1",
+        "boyuerichdata": "http://35.220.164.252:3888",
+    }
+    
+    if selected_provider in base_url_map:
+        config_data["llm"][selected_provider]["base_url"] = base_url_map[selected_provider]
     
     # Save config
     with open(cfg_path, "w") as f:

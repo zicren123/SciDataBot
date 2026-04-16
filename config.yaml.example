@@ -80,6 +80,11 @@ tools:
     timeout: 300
   web:
     brave_api_key: ''
+    kimi_api_key: ''
+    kimi_base_url: https://api.moonshot.cn/v1
+    kimi_search_path: /search
+    provider: auto  # auto|kimi|brave|ddg
+    proxy: null
     max_redirects: 5
     timeout: 30
 workspace: ~/.scidatabot
